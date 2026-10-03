@@ -1,0 +1,32 @@
+# CloudDesk canonical workflow v1
+name: CloudDesk
+run-name: "CloudDesk session: ${{ inputs.session_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: "CloudDesk session identifier"
+        required: true
+        type: string
+
+jobs:
+  clouddesk:
+    name: "CloudDesk macOS Session"
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Environment Diagnostics
+        run: |
+          echo "=== System & Kernel ==="
+          uname -a
+          echo "=== macOS Version ==="
+          sw_vers
+          echo "=== Architecture ==="
+          uname -m
+          echo "=== Runner Variables ==="
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Arch: ${{ runner.arch }}"
+          echo "GitHub Repository: ${{ github.repository }}"
+          echo "GitHub Ref: ${{ github.ref }}"
+          echo "Session ID: ${{ inputs.session_id }}"
