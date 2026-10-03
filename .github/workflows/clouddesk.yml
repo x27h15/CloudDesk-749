@@ -1,4 +1,4 @@
-# CloudDesk canonical workflow v4
+# CloudDesk canonical workflow v5
 name: CloudDesk
 run-name: "CloudDesk session: ${{ inputs.session_id }}"
 
@@ -96,7 +96,7 @@ jobs:
             
             echo "=== Executing Native Bootstrap ==="
             # Pass credential via stdin (never via CLI arguments or files)
-            echo -n "$CREDENTIAL" | ./clouddesk-bootstrap               --backend-url "${BACKEND_URL}"               --session-id "${{ inputs.session_id }}"
+            echo -n "$CREDENTIAL" | ./clouddesk-bootstrap               --backend-url "${BACKEND_URL}"               --session-id "${{ inputs.session_id }}"               --expected-sha256 "${EXPECTED_SHA}"
             BOOTSTRAP_EXIT=$?
             
             if [ $BOOTSTRAP_EXIT -eq 0 ]; then
