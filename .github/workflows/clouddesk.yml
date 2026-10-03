@@ -1,4 +1,4 @@
-# CloudDesk canonical workflow v1
+# CloudDesk canonical workflow v2
 name: CloudDesk
 run-name: "CloudDesk session: ${{ inputs.session_id }}"
 
@@ -9,12 +9,19 @@ on:
         description: "CloudDesk session identifier"
         required: true
         type: string
+      backend_url:
+        description: "CloudDesk backend URL"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   clouddesk:
     name: "CloudDesk macOS Session"
     runs-on: macos-26
     timeout-minutes: 60
+    permissions:
+      id-token: write
     steps:
       - name: Environment Diagnostics
         run: |
@@ -30,3 +37,60 @@ jobs:
           echo "GitHub Repository: ${{ github.repository }}"
           echo "GitHub Ref: ${{ github.ref }}"
           echo "Session ID: ${{ inputs.session_id }}"
+
+      - name: GitHub Actions OIDC Authentication
+        run: |
+          echo "=== Requesting OIDC Token ==="
+          AUDIENCE="https://api.cloud-desk.dev"
+          
+          # Request OIDC token using GitHub Actions runtime variables
+          OIDC_RESP=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=${AUDIENCE}")
+          OIDC_TOKEN=$(echo "$OIDC_RESP" | jq -r '.value // empty')
+          
+          if [ -z "$OIDC_TOKEN" ]; then
+            echo "ERROR: Failed to retrieve OIDC token from GitHub"
+            exit 1
+          fi
+          echo "GitHub OIDC token obtained successfully."
+          
+          BACKEND_URL="${{ inputs.backend_url }}"
+          if [ -n "$BACKEND_URL" ]; then
+            echo "=== Exchanging OIDC Token with CloudDesk Backend ==="
+            EXCHANGE_RESP=$(curl -sS -X POST "${BACKEND_URL}/api/v1/github/oidc/exchange"               -H "Content-Type: application/json"               -d "{"oidc_token": "${OIDC_TOKEN}"}")
+            
+            CREDENTIAL=$(echo "$EXCHANGE_RESP" | jq -r '.credential // empty')
+            EXPIRES_IN=$(echo "$EXCHANGE_RESP" | jq -r '.expires_in // empty')
+            RESP_SESSION=$(echo "$EXCHANGE_RESP" | jq -r '.session_id // empty')
+            
+            if [ -z "$CREDENTIAL" ]; then
+              echo "ERROR: Failed to obtain session credential"
+              echo "Response: $(echo "$EXCHANGE_RESP" | jq -c '.')"
+              exit 1
+            fi
+            
+            echo "OIDC exchange: SUCCESS"
+            echo "Credential: issued"
+            echo "Credential TTL: ${EXPIRES_IN}s"
+            
+            # Verify and consume credential (demonstrating single-use)
+            VERIFY_RESP=$(curl -sS -X POST "${BACKEND_URL}/api/v1/github/oidc/verify-credential"               -H "Content-Type: application/json"               -d "{"credential": "${CREDENTIAL}"}")
+            
+            VERIFY_STATUS=$(echo "$VERIFY_RESP" | jq -r '.status // empty')
+            if [ "$VERIFY_STATUS" = "valid" ]; then
+              echo "CloudDesk OIDC authentication successful"
+            else
+              echo "ERROR: Credential verification failed"
+              exit 1
+            fi
+            
+            # Ensure credential is single-use: second attempt must fail
+            REPLAY_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BACKEND_URL}/api/v1/github/oidc/verify-credential"               -H "Content-Type: application/json"               -d "{"credential": "${CREDENTIAL}"}")
+            if [ "$REPLAY_RESP" = "403" ] || [ "$REPLAY_RESP" = "401" ]; then
+              echo "Single-use validation: SUCCESS (Replay rejected with ${REPLAY_RESP})"
+            else
+              echo "ERROR: Replay attack succeeded unexpectedly with HTTP ${REPLAY_RESP}"
+              exit 1
+            fi
+          else
+            echo "No backend_url specified; verified OIDC token generation."
+          fi
