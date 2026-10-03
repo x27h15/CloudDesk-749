@@ -1,4 +1,4 @@
-# CloudDesk canonical workflow v3
+# CloudDesk canonical workflow v4
 name: CloudDesk
 run-name: "CloudDesk session: ${{ inputs.session_id }}"
 
@@ -38,12 +38,11 @@ jobs:
           echo "GitHub Ref: ${{ github.ref }}"
           echo "Session ID: ${{ inputs.session_id }}"
 
-      - name: GitHub Actions OIDC Authentication
+      - name: Run CloudDesk Native Bootstrap
         run: |
           echo "=== Requesting OIDC Token ==="
           AUDIENCE="https://api.cloud-desk.dev"
           
-          # Request OIDC token using GitHub Actions runtime variables
           OIDC_RESP=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=${AUDIENCE}")
           OIDC_TOKEN=$(echo "$OIDC_RESP" | jq -r '.value // empty')
           
@@ -73,24 +72,37 @@ jobs:
             echo "Credential: issued"
             echo "Credential TTL: ${EXPIRES_IN}s"
             
-            # Verify and consume credential (demonstrating single-use)
-            VERIFY_PAYLOAD=$(jq -n --arg cred "$CREDENTIAL" '{"credential": $cred}')
-            VERIFY_RESP=$(curl -sS -X POST "${BACKEND_URL}/api/v1/github/oidc/verify-credential"               -H "Content-Type: application/json"               -d "$VERIFY_PAYLOAD")
+            echo "=== Fetching Native Bootstrap Artifact ==="
+            META_RESP=$(curl -sS "${BACKEND_URL}/api/v1/bootstrap/artifact?platform=macos&arch=arm64")
+            EXPECTED_SHA=$(echo "$META_RESP" | jq -r '.sha256 // empty')
             
-            VERIFY_STATUS=$(echo "$VERIFY_RESP" | jq -r '.status // empty')
-            if [ "$VERIFY_STATUS" = "valid" ]; then
-              echo "CloudDesk OIDC authentication successful"
-            else
-              echo "ERROR: Credential verification failed"
+            if [ -z "$EXPECTED_SHA" ]; then
+              echo "ERROR: Failed to fetch bootstrap artifact metadata"
               exit 1
             fi
+            echo "Expected Bootstrap SHA-256: ${EXPECTED_SHA}"
             
-            # Ensure credential is single-use: second attempt must fail
-            REPLAY_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BACKEND_URL}/api/v1/github/oidc/verify-credential"               -H "Content-Type: application/json"               -d "$VERIFY_PAYLOAD")
-            if [ "$REPLAY_RESP" = "403" ] || [ "$REPLAY_RESP" = "401" ]; then
-              echo "Single-use validation: SUCCESS (Replay rejected with ${REPLAY_RESP})"
+            echo "Downloading Native Bootstrap binary..."
+            curl -sS "${BACKEND_URL}/api/v1/bootstrap/download?platform=macos&arch=arm64" -o clouddesk-bootstrap
+            chmod +x clouddesk-bootstrap
+            
+            echo "Verifying SHA-256 integrity..."
+            ACTUAL_SHA=$(shasum -a 256 clouddesk-bootstrap | awk '{print $1}')
+            if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+              echo "ERROR: Bootstrap SHA-256 mismatch: expected $EXPECTED_SHA, got $ACTUAL_SHA"
+              exit 1
+            fi
+            echo "Integrity verification: SUCCESS"
+            
+            echo "=== Executing Native Bootstrap ==="
+            # Pass credential via stdin (never via CLI arguments or files)
+            echo -n "$CREDENTIAL" | ./clouddesk-bootstrap               --backend-url "${BACKEND_URL}"               --session-id "${{ inputs.session_id }}"
+            BOOTSTRAP_EXIT=$?
+            
+            if [ $BOOTSTRAP_EXIT -eq 0 ]; then
+              echo "Native Bootstrap execution: SUCCESS"
             else
-              echo "ERROR: Replay attack succeeded unexpectedly with HTTP ${REPLAY_RESP}"
+              echo "ERROR: Native Bootstrap failed with exit code ${BOOTSTRAP_EXIT}"
               exit 1
             fi
           else
