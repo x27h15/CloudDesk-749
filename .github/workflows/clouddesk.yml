@@ -1,4 +1,4 @@
-# CloudDesk canonical workflow v2
+# CloudDesk canonical workflow v3
 name: CloudDesk
 run-name: "CloudDesk session: ${{ inputs.session_id }}"
 
@@ -56,7 +56,8 @@ jobs:
           BACKEND_URL="${{ inputs.backend_url }}"
           if [ -n "$BACKEND_URL" ]; then
             echo "=== Exchanging OIDC Token with CloudDesk Backend ==="
-            EXCHANGE_RESP=$(curl -sS -X POST "${BACKEND_URL}/api/v1/github/oidc/exchange"               -H "Content-Type: application/json"               -d "{"oidc_token": "${OIDC_TOKEN}"}")
+            EXCHANGE_PAYLOAD=$(jq -n --arg tok "$OIDC_TOKEN" '{"oidc_token": $tok}')
+            EXCHANGE_RESP=$(curl -sS -X POST "${BACKEND_URL}/api/v1/github/oidc/exchange"               -H "Content-Type: application/json"               -d "$EXCHANGE_PAYLOAD")
             
             CREDENTIAL=$(echo "$EXCHANGE_RESP" | jq -r '.credential // empty')
             EXPIRES_IN=$(echo "$EXCHANGE_RESP" | jq -r '.expires_in // empty')
@@ -73,7 +74,8 @@ jobs:
             echo "Credential TTL: ${EXPIRES_IN}s"
             
             # Verify and consume credential (demonstrating single-use)
-            VERIFY_RESP=$(curl -sS -X POST "${BACKEND_URL}/api/v1/github/oidc/verify-credential"               -H "Content-Type: application/json"               -d "{"credential": "${CREDENTIAL}"}")
+            VERIFY_PAYLOAD=$(jq -n --arg cred "$CREDENTIAL" '{"credential": $cred}')
+            VERIFY_RESP=$(curl -sS -X POST "${BACKEND_URL}/api/v1/github/oidc/verify-credential"               -H "Content-Type: application/json"               -d "$VERIFY_PAYLOAD")
             
             VERIFY_STATUS=$(echo "$VERIFY_RESP" | jq -r '.status // empty')
             if [ "$VERIFY_STATUS" = "valid" ]; then
@@ -84,7 +86,7 @@ jobs:
             fi
             
             # Ensure credential is single-use: second attempt must fail
-            REPLAY_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BACKEND_URL}/api/v1/github/oidc/verify-credential"               -H "Content-Type: application/json"               -d "{"credential": "${CREDENTIAL}"}")
+            REPLAY_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${BACKEND_URL}/api/v1/github/oidc/verify-credential"               -H "Content-Type: application/json"               -d "$VERIFY_PAYLOAD")
             if [ "$REPLAY_RESP" = "403" ] || [ "$REPLAY_RESP" = "401" ]; then
               echo "Single-use validation: SUCCESS (Replay rejected with ${REPLAY_RESP})"
             else
